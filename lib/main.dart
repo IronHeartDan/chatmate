@@ -1,6 +1,16 @@
-import 'package:flutter/material.dart';
+import 'dart:collection';
 
-void main() {
+import 'package:chatmate/privateChat.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+
+import 'classes.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   runApp(MyApp());
 }
 
@@ -20,7 +30,7 @@ class MyApp extends StatelessWidget {
         // or simply save your changes to "hot reload" in a Flutter IDE).
         // Notice that the counter didn't reset back to zero; the application
         // is not restarted.
-        primarySwatch: Colors.blueGrey,
+        primarySwatch: Colors.pink,
       ),
       home: Home(),
     );
@@ -33,28 +43,57 @@ class Home extends StatefulWidget {
 }
 
 class HomeState extends State<Home> {
+  String? userName;
+  IO.Socket? socket;
+  TextEditingController search = TextEditingController();
+  final HashMap<String, User> users = new HashMap();
+  late String? token;
+  final GlobalKey<ScaffoldState> scaffoldKey = GlobalKey<ScaffoldState>();
+
   @override
   void initState() {
     Future.delayed(Duration.zero, () => showAlert(context));
     super.initState();
   }
 
-  showAlert(BuildContext context) {
-    showDialog(
+  void showAlert(BuildContext context) async {
+    token = await FirebaseMessaging.instance.getToken();
+    await showDialog(
         barrierDismissible: false,
         context: context,
         builder: (context) => AlertDialog(
               title: Text("Enter UserName"),
               content: TextField(
                 decoration: InputDecoration(hintText: "Eg : _darknoon"),
+                onChanged: (value) {
+                  setState(() {
+                    userName = value;
+                  });
+                },
               ),
               actions: [
-                GestureDetector(
+                InkWell(
                   onTap: () {
-                    Navigator.of(context).pop();
+                    print("Taped!!!.");
+                    socket = IO.io(
+                        'http://192.168.1.2:3000?username=$userName',
+                        IO.OptionBuilder()
+                            .setTransports(['websocket']).build());
+                    socket?.connect();
+                    socket?.onConnect((_) {
+                      socket?.emit("token", token);
+                      Navigator.of(context).pop();
+                    });
+
+                    socket?.on("isOnline", (data) {
+                      setState(() {
+                        users["${data['who']}"] =
+                            new User(data['who'], data['online']);
+                      });
+                    });
                   },
                   child: Padding(
-                    padding: const EdgeInsets.all(8.0),
+                    padding: const EdgeInsets.all(10.0),
                     child: Text("GO!"),
                   ),
                 )
@@ -65,144 +104,109 @@ class HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: scaffoldKey,
       appBar: AppBar(
         title: Text("ChatMate"),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: GestureDetector(onTap: () {}, child: Icon(Icons.call)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: GestureDetector(onTap: () {}, child: Icon(Icons.videocam)),
-          )
-        ],
       ),
       body: SafeArea(
         child: Column(
-          children: [Expanded(child: MessageCon()), InputChat()],
-        ),
-      ),
-    );
-  }
-}
-
-// MessageCon Widget
-class MessageCon extends StatefulWidget {
-  @override
-  State<StatefulWidget> createState() => MessageConState();
-}
-
-class MessageConState extends State<MessageCon> {
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-        itemCount: 10,
-        itemBuilder: (BuildContext context, int index) {
-          return Dismissible(
-            background: Container(
-              color: Colors.red,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(10.0),
-                    child: Icon(
-                      Icons.delete,
-                      color: Colors.white,
+          children: [
+            Card(
+              elevation: 5.0,
+              shadowColor: Colors.deepOrange,
+              child: Container(
+                padding: EdgeInsets.all(15.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: search,
+                        decoration: InputDecoration(hintText: "Search"),
+                      ),
                     ),
-                  )
-                ],
-              ),
-            ),
-            direction: DismissDirection.endToStart,
-            confirmDismiss: (DismissDirection direction) {
-              return showDialog(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return AlertDialog(
-                      title: Text(
-                        "Confirm Delete?",
-                        style: TextStyle(color: Colors.red),
+                    InkWell(
+                      onTap: () {
+                        String friend = search.text.trim().toString();
+                        if (friend.isNotEmpty) {
+                          socket?.emit("getPresence", friend);
+                          search.text = '';
+                        } else {
+                          final snackBar = SnackBar(
+                            content: Text('Enter UserName'),
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(snackBar);
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Icon(Icons.add),
                       ),
-                      content: Text(index.toString()),
-                      actions: [],
-                    );
-                  });
-            },
-            key: UniqueKey(),
-            child: Padding(
-              padding: EdgeInsets.only(left: 5, top: 15, bottom: 15),
-              child: Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(5.0),
-                    child: Icon(Icons.person),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "From",
-                        style: TextStyle(fontSize: 10),
-                      ),
-                      Text(
-                        "Message",
-                        style: TextStyle(fontSize: 15),
-                      )
-                    ],
-                  )
-                ],
-              ),
-            ),
-          );
-        });
-  }
-}
-
-// InputChat Widget
-
-class InputChat extends StatefulWidget {
-  @override
-  State<StatefulWidget> createState() => InputChatState();
-}
-
-class InputChatState extends State<InputChat> {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(boxShadow: [
-        BoxShadow(
-            offset: Offset(0, 0), color: Colors.deepOrange, blurRadius: 2),
-        BoxShadow(offset: Offset(0, 0), color: Colors.white, blurRadius: 0),
-      ]),
-      child: Row(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: TextField(
-                decoration: InputDecoration(
-                  hintText: "Enter Message",
+                    )
+                  ],
                 ),
               ),
             ),
-          ),
-          GestureDetector(
-            onTap: () {},
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Icon(Icons.person),
+            Expanded(
+              child: ListView.builder(
+                  itemCount: users.length,
+                  itemBuilder: (BuildContext context, int index) {
+                    User user = new User(List.of(users.keys)[index],
+                        List.of(users.values)[index].isOnline);
+                    return Container(
+                      padding: EdgeInsets.all(5.0),
+                      child: Card(
+                        elevation: 5.0,
+                        shadowColor: Colors.green,
+                        shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.all(Radius.circular(10))),
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.of(context).push(MaterialPageRoute(
+                                builder: (BuildContext context) => PrivateChat(
+                                      socket: socket,
+                                      user: user,
+                                    )));
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              borderRadius:
+                                  BorderRadius.all(Radius.circular(5.0)),
+                            ),
+                            padding: EdgeInsets.only(
+                                top: 20.0,
+                                bottom: 20.0,
+                                left: 10.0,
+                                right: 10.0),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.person,
+                                  size: 35.0,
+                                ),
+                                SizedBox(
+                                  width: 10,
+                                ),
+                                Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(user.name),
+                                      SizedBox(
+                                        height: 5,
+                                      ),
+                                      Text(user.isOnline ? "Online" : "Offline")
+                                    ])
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
             ),
-          ),
-          GestureDetector(
-            onTap: () {},
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Icon(Icons.send),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
